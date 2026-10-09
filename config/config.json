@@ -1,0 +1,23 @@
+{
+  "port": 8788,
+  "gatewayKey": "local-gateway",
+  "debug": false,
+  "timeoutMs": 180000,
+  "providers": {
+    "deepseek": {
+      "baseUrl": "https://api.deepseek.com",
+      "apiKey": "",
+      "apiKeyEnv": "DEEPSEEK_API_KEY"
+    }
+  },
+  "models": {
+    "deepseek-flash": {
+      "provider": "deepseek",
+      "model": "deepseek-flash",
+      "enabled": true,
+      "tools": true,
+      "vision": true,
+      "description": ""
+    }
+  }
+}

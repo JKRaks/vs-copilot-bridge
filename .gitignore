@@ -1,0 +1,7 @@
+logs/
+config/*.tmp
+config/*.bak
+config/*.local.json
+.env
+.env.*
+!.env.example
