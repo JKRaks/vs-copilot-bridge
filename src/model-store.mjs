@@ -1,7 +1,7 @@
 import { readFileSync, watchFile, unwatchFile } from "node:fs";
 import { validateModels } from "./config-store.mjs";
 
-// 监听模型映射变化，仅在校验通过后替换；失败时保留当前映射。
+// 监听模型映射变化并替换 校验失败保留原映射
 export function watchModels(path, initial, providers, onReload, onError) {
   let previous = JSON.stringify(initial);
   let lastError = "";

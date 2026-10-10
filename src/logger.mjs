@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { dirname } from "node:path";
 
-// 创建带密钥脱敏和大小滚动的日志写入器，控制台可仅接收摘要。
+// 日志写入
 export function createLogger(
   path,
   { secrets = [], maxBytes = 1024 * 1024, backups = 3, consoleOutput = true } = {},

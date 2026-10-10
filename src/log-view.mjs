@@ -1,4 +1,4 @@
-// 将 JSON 格式化为多行，并按终端宽度换行；普通文本保留原有换行。
+// 格式化日志
 export function formatLogLines(value, columns) {
   let content = value;
   if (typeof content === "string") {

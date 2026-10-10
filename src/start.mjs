@@ -80,7 +80,7 @@ function colorLine(text) {
 function entries() {
   return tab === 1 ? Object.entries(config.providers) : tab === 2 ? Object.entries(config.models) : [];
 }
-// 为不同配置类型生成编辑字段，密钥字段只做遮挡展示。
+// 生成配置编辑字段
 function fields(section, id = "", value = {}) {
   if (section === "providers")
     return [
@@ -111,14 +111,14 @@ function fields(section, id = "", value = {}) {
     { key: "debug", label: "完整调试日志", value: config.debug, boolean: true },
   ];
 }
-// 打开配置表单；运行中只允许修改支持热重载的模型映射。
+// 打开配置表单
 function openForm(section, id, value) {
   if (runtime.child && section !== "models")
     throw new Error("提供商和运行设置需先停止代理；模型映射可直接修改");
   form = { section, id, original: value || {}, fields: fields(section, id, value), cursor: 0 };
   notice = "修改后按 Ctrl+S 保存；Esc 放弃。";
 }
-// 合并表单与最新配置并保存，保留表单之外的配置项。
+// 合并表单与最新配置并保存
 function persist() {
   config = loadConfig(path);
   const values = Object.fromEntries(form.fields.map((field) => [field.key, field.value]));
@@ -144,7 +144,7 @@ function persist() {
   cursor = 0;
   notice = runtime.child ? "已保存，等待模型映射自动重载…" : "已保存。";
 }
-// 只绘制可见列表区间，让当前选中项保持在窗口内。
+// 只绘制可见列表区间
 function windowed(lines, items, selected, format) {
   const count = Math.max(1, (process.stdout.rows || 25) - 14);
   const begin = Math.max(0, selected - count + 1);
@@ -153,7 +153,7 @@ function windowed(lines, items, selected, format) {
   if (!items.length)
     lines.push("  暂无记录");
 }
-// 内容超出显示区域时，在右侧按可见比例绘制滚动位置。
+// 内容超出显示区域时，在右侧按可见比例绘制滚动位置
 function addScrollbar(lines, start, total, offset, visible, columns) {
   const height = lines.length - start;
   if (!height || total <= visible)
@@ -171,7 +171,7 @@ function rangeLabel(offset, visible, total, unit) {
   const end = Math.min(total, offset + visible);
   return `${offset + 1}–${end} / ${total} ${unit} · ${Math.round((end / total) * 100)}%`;
 }
-// 按多行卡片展示提供商或模型，并根据窗口高度分页。
+// 按多行卡片展示提供商或模型
 function renderEntries(lines, columns) {
   const items = entries();
   const height = tab === 1 ? 4 : 7;
@@ -205,7 +205,7 @@ function renderEntries(lines, columns) {
     lines.push(`显示 ${rangeLabel(begin, count, items.length, "项")}（选中 ${cursor + 1}）`);
   }
 }
-// 分配日志列表和详情区域，按滚动位置展示格式化后的内容。
+// 分配日志列表和详情区域，按滚动位置展示格式化后的内容
 function renderLogs(lines, columns, rows) {
   const recent = [...runtime.recent].reverse();
   cursor = Math.min(cursor, Math.max(0, recent.length - 1));
@@ -244,7 +244,7 @@ function renderLogs(lines, columns, rows) {
       : "↑↓ 选日志  PgUp/PgDn 滚动详情  Enter 展开",
   );
 }
-// 根据当前页面和编辑状态重绘终端，预留固定的底部操作提示。
+// 重绘终端
 function render() {
   if (!dirty || quitting)
     return;
@@ -324,7 +324,7 @@ function render() {
       "\x1b[J",
   );
 }
-// 先停止代理，再移除监听并恢复终端状态。
+// 先停止代理
 async function quit() {
   if (quitting)
     return;
@@ -338,7 +338,7 @@ async function quit() {
   process.stdin.pause();
   process.stdout.write("\x1b[?25h\x1b[?1049l");
 }
-// 处理字段输入、确认和取消，不在此阶段写入配置文件。
+// 处理字段输入
 function handleInput(character, key) {
   if (key.name === "escape")
     input = null;
@@ -357,7 +357,7 @@ function handleInput(character, key) {
   )
     input.text += clean(character);
 }
-// 处理表单导航、布尔开关和整张表单的保存。
+// 处理保存
 function handleForm(key) {
   if (key.name === "escape") {
     form = null;
@@ -376,7 +376,7 @@ function handleForm(key) {
       input = { field, text: "" };
   }
 }
-// 处理配置列表的编辑、增删，以及模型启用状态切换。
+// 处理列表更新
 function handleList(character, key) {
   const list = tab === 4 ? runtime.recent : entries();
   if (key.name === "up")
@@ -414,7 +414,7 @@ function handleList(character, key) {
     }
   }
 }
-// 区分日志选择和详情滚动，展开时固定当前日志内容。
+// 处理日志操作
 function handleLogs(key) {
   if (key.name === "escape") {
     logDetail = null;
@@ -440,7 +440,7 @@ function handleLogs(key) {
     }
   }
 }
-// 按输入框、确认框、表单和页面的优先级分发按键。
+// 快捷键监听
 async function keypress(character, key = {}) {
   if (quitting)
     return;
@@ -520,7 +520,7 @@ runtime.on("change", () => {
 emitKeypressEvents(process.stdin);
 process.stdin.setRawMode(true);
 process.stdin.resume();
-// 同步外部配置变化到界面，读取失败时保留当前配置。
+// 重载外部配置
 function refreshConfig() {
   try {
     config = loadConfig(path);

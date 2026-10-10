@@ -14,7 +14,7 @@ export class GatewayRuntime extends EventEmitter {
       failed: 0,
     });
   }
-  // 汇总子进程日志和请求状态，通知界面刷新，并限制历史记录数量。
+  // 汇总子进程日志和请求状态
   record(event) {
     this.recent.push(event);
     if (this.recent.length > 150)
@@ -30,7 +30,7 @@ export class GatewayRuntime extends EventEmitter {
         this.requests.delete(this.requests.keys().next().value);
     }
     const r = this.requests.get(event.id);
-    if (r && (event.status >= 400 || /error|timeout/.test(event.event))) {
+    if (r && !r.outcome && (event.status >= 400 || /error|timeout/.test(event.event))) {
       if (!r.failed) {
         r.failed = true;
         this.failed++;
@@ -39,12 +39,17 @@ export class GatewayRuntime extends EventEmitter {
     }
     if (r && event.event === "request.end") {
       r.elapsedMs = event.elapsedMs;
-      r.status = r.failed ? "失败" : "完成";
+      r.outcome = event.outcome || (r.failed ? "failed" : "success");
+      if (r.outcome === "failed" && !r.failed) {
+        r.failed = true;
+        this.failed++;
+      }
+      r.status = r.outcome === "cancelled" ? "已取消" : r.outcome === "success" ? "完成" : "失败";
       this.active.delete(event.id);
     }
     this.emit("change");
   }
-  // 按选定入口启动代理子进程，接收日志并跟踪进程退出。
+  // 按选定入口启动代理子进程，接收日志并跟踪进程退出
   start(modes) {
     if (this.child || !modes.length)
       throw new Error("请选择至少一种入口，并先停止已运行的代理");
@@ -89,7 +94,7 @@ export class GatewayRuntime extends EventEmitter {
     );
     this.emit("change");
   }
-  // 停止本界面启动的代理，并等待退出后再完成清理。
+  // 停止代理并清理
   async stop() {
     if (!this.child)
       return;
