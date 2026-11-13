@@ -5,6 +5,7 @@ import { watchFile, unwatchFile } from "node:fs";
 import { loadConfig, saveConfig, updateEntry, deleteEntry } from "./config-store.mjs";
 import { GatewayRuntime } from "./runtime.mjs";
 import { formatLogLines } from "./log-view.mjs";
+import { TerminalInput, hitTest, enableMouse, disableMouse } from "./terminal-input.mjs";
 
 const folder = dirname(fileURLToPath(import.meta.url));
 const path = resolve(process.argv[2] || resolve(folder, "../config/config.json"));
@@ -34,6 +35,13 @@ let logDetail = null,
   logOffset = 0,
   logMaximum = 0,
   logPageSize = 1;
+let hitRegions = [],
+  mouseBusy = false,
+  smallTerminal = false,
+  logContentRow = null;
+const terminalInput = new TerminalInput((event) => {
+  void mouse(event);
+});
 const stateNames = { stopped: "已停止", starting: "启动中", running: "运行中", stopping: "停止中" };
 
 // Never allow control sequences from upstream responses to alter the terminal.
@@ -77,6 +85,113 @@ function colorLine(text) {
     },
   );
 }
+// 渲染时记录热区，按钮和键盘共用同一条操作路径。
+function addRegion(x, y, width, height, action) {
+  hitRegions.push({ x, y, width, height, action });
+}
+function actionButton(label, character = "", key = {}) {
+  return { label, action: () => keypress(character, key) };
+}
+function buttonLine(buttons, y) {
+  let line = "";
+  for (const button of buttons) {
+    if (line)
+      line += "  ";
+    const x = [...line].reduce((sum, character) => sum + width(character), 0);
+    const text = `[${button.label}]`;
+    const size = [...text].reduce((sum, character) => sum + width(character), 0);
+    line += text;
+    addRegion(x, y, size, 1, button.action);
+  }
+  return line;
+}
+function tabLine() {
+  let line = "";
+  for (let i = 0; i < tabs.length; i++) {
+    if (line)
+      line += "  ";
+    const x = [...line].reduce((sum, character) => sum + width(character), 0);
+    const text = i === tab ? `[${tabs[i]}]` : ` ${tabs[i]} `;
+    const size = [...text].reduce((sum, character) => sum + width(character), 0);
+    line += text;
+    if (!form && !input && !confirm)
+      addRegion(x, 2, size, 1, () => switchTab(i));
+  }
+  return line;
+}
+function toolbar(y) {
+  if (input)
+    return buttonLine([
+      actionButton("确认 Enter", "", { name: "return" }),
+      actionButton("取消 Esc", "", { name: "escape" }),
+    ], y);
+  if (confirm)
+    return buttonLine([
+      actionButton("确认删除 Y", "y"),
+      actionButton("取消 Esc", "", { name: "escape" }),
+    ], y);
+  if (form)
+    return buttonLine([
+      actionButton("保存 Ctrl+S", "", { name: "s", ctrl: true }),
+      actionButton("放弃 Esc", "", { name: "escape" }),
+    ], y);
+  const buttons = [];
+  if (tab === 0)
+    buttons.push(actionButton(runtime.child ? "停止 S" : "启动 S", "s"));
+  else if (tab === 1 || tab === 2) {
+    buttons.push(
+      actionButton("编辑", "", { name: "return" }),
+      actionButton("新增", "a"),
+      actionButton("删除", "d"),
+    );
+    if (tab === 2)
+      buttons.push(actionButton("启用/禁用", "e"));
+  } else if (tab === 3)
+    buttons.push(actionButton("编辑", "", { name: "return" }));
+  else
+    buttons.push(
+      actionButton(logDetail ? "返回 Esc" : "展开 Enter", "", { name: logDetail ? "escape" : "return" }),
+      actionButton("上页", "", { name: "pageup" }),
+      actionButton("下页", "", { name: "pagedown" }),
+    );
+  buttons.push(actionButton("退出", "q"));
+  return buttonLine(buttons, y);
+}
+function switchTab(next) {
+  tab = next;
+  cursor = 0;
+  notice = "";
+  logDetail = null;
+  logOffset = 0;
+}
+async function mouse(event) {
+  if (quitting || mouseBusy)
+    return;
+  mouseBusy = true;
+  try {
+    if (event.type === "wheel") {
+      if (input || confirm || smallTerminal)
+        return;
+      const name = event.direction < 0 ? "up" : "down";
+      if (tab === 4 && !form && logContentRow !== null && event.y >= logContentRow) {
+        logOffset = Math.max(0, Math.min(logMaximum, logOffset + event.direction * 3));
+      } else {
+        for (let i = 0; i < 3; i++)
+          await keypress("", { name });
+      }
+    } else {
+      const region = hitTest(hitRegions, event.x, event.y);
+      if (!region)
+        return;
+      await region.action();
+    }
+  } finally {
+    mouseBusy = false;
+    dirty = true;
+    render();
+  }
+}
+
 function entries() {
   return tab === 1 ? Object.entries(config.providers) : tab === 2 ? Object.entries(config.models) : [];
 }
@@ -148,8 +263,13 @@ function persist() {
 function windowed(lines, items, selected, format) {
   const count = Math.max(1, (process.stdout.rows || 25) - 14);
   const begin = Math.max(0, selected - count + 1);
-  for (let i = begin; i < Math.min(items.length, begin + count); i++)
+  for (let i = begin; i < Math.min(items.length, begin + count); i++) {
+    addRegion(0, lines.length, process.stdout.columns || 80, 1, () => {
+      form.cursor = i;
+      return keypress("", { name: "return" });
+    });
     lines.push(`${i === selected ? "›" : " "} ${format(items[i], i)}`);
+  }
   if (!items.length)
     lines.push("  暂无记录");
 }
@@ -175,11 +295,14 @@ function rangeLabel(offset, visible, total, unit) {
 function renderEntries(lines, columns) {
   const items = entries();
   const height = tab === 1 ? 4 : 7;
-  const count = Math.max(1, Math.floor(((process.stdout.rows || 25) - 10) / height));
+  const count = Math.max(1, Math.floor(((process.stdout.rows || 25) - 11) / height));
   const begin = Math.max(0, Math.min(cursor - count + 1, items.length - count));
   const start = lines.length;
   for (let i = begin; i < Math.min(items.length, begin + count); i++) {
     const [id, value] = items[i];
+    addRegion(0, lines.length, columns, height - 1, () => {
+      cursor = i;
+    });
     lines.push(`${i === cursor ? "›" : " "} ${id}`);
     if (tab === 1) {
       const keySet = value.apiKey || (value.apiKeyEnv && process.env[value.apiKeyEnv]);
@@ -221,6 +344,10 @@ function renderLogs(lines, columns, rows) {
     const start = lines.length;
     for (let i = begin; i < begin + count; i++) {
       const event = recent[i];
+      addRegion(0, lines.length, columns, 1, () => {
+        cursor = i;
+        logOffset = 0;
+      });
       lines.push(
         `${i === cursor ? "›" : " "} ${event.time?.slice(11, 19) || ""} ${event.id || ""} ${event.event || ""} ${event.status || ""}`,
       );
@@ -228,7 +355,7 @@ function renderLogs(lines, columns, rows) {
     addScrollbar(lines, start, recent.length, begin, count, columns);
     lines.push(`日志 ${rangeLabel(begin, count, recent.length, "条")}`);
   }
-  logPageSize = Math.max(1, rows - 3 - lines.length - 2);
+  logPageSize = Math.max(1, rows - 4 - lines.length - 2);
   let details = formatLogLines(selected, columns);
   if (details.length > logPageSize)
     details = formatLogLines(selected, columns - 2);
@@ -236,6 +363,7 @@ function renderLogs(lines, columns, rows) {
   logOffset = Math.min(logOffset, logMaximum);
   lines.push(`详情 ${rangeLabel(logOffset, logPageSize, details.length, "行")}`);
   const detailStart = lines.length;
+  logContentRow = detailStart;
   lines.push(...details.slice(logOffset, logOffset + logPageSize));
   addScrollbar(lines, detailStart, details.length, logOffset, Math.min(logPageSize, details.length), columns);
   lines.push(
@@ -249,16 +377,19 @@ function render() {
   if (!dirty || quitting)
     return;
   dirty = false;
+  hitRegions = [];
+  logContentRow = null;
   const columns = Math.max(10, (process.stdout.columns || 80) - 1),
     rows = process.stdout.rows || 25;
-  if (rows < 18 || columns < 45) {
+  smallTerminal = rows < 18 || columns < 45;
+  if (smallTerminal) {
     process.stdout.write("\x1b[H\x1b[J请放大终端至至少 46 列 × 18 行。Q 退出。");
     return;
   }
   const lines = [
     `本地模型网关   ● ${stateNames[runtime.state]}   :${config.port}`,
     "",
-    tabs.map((name, i) => (i === tab ? `[${name}]` : ` ${name} `)).join("  "),
+    tabLine(),
     "─".repeat(Math.min(columns, 90)),
   ];
   if (form) {
@@ -274,6 +405,12 @@ function render() {
     );
     lines.push("", "↑↓ 选字段  Enter 编辑/切换  Ctrl+S 保存  Esc 放弃");
   } else if (tab === 0) {
+    for (let i = 0; i < 2; i++) {
+      addRegion(0, lines.length + i, columns, 1, () => {
+        cursor = i;
+        return keypress("", { name: "return" });
+      });
+    }
     lines.push(
       `${cursor === 0 ? "›" : " "} [${modes.includes("openai") ? "x" : " "}] OpenAI   http://127.0.0.1:${config.port}/v1`,
       `${cursor === 1 ? "›" : " "} [${modes.includes("ollama") ? "x" : " "}] Ollama   http://127.0.0.1:${config.port}`,
@@ -315,7 +452,18 @@ function render() {
     : confirm
       ? [confirm.label, "Y 确认删除 / Esc 取消"]
       : [notice, "Tab / ←→ 切换页面   Q / Ctrl+C 退出并停止代理"];
+  if (input || confirm)
+    hitRegions = [];
+  const buttons = toolbar(rows - 2);
+  footer.push(buttons);
   const body = lines.slice(0, rows - footer.length - 1);
+  hitRegions = hitRegions.filter((region) =>
+    region.x < columns && (region.y < body.length || region.y === rows - 2));
+  for (const region of hitRegions) {
+    region.width = Math.min(region.width, columns - region.x);
+    if (region.y < body.length)
+      region.height = Math.min(region.height, body.length - region.y);
+  }
   while (body.length < rows - footer.length - 1)
     body.push("");
   process.stdout.write(
@@ -332,11 +480,13 @@ async function quit() {
   await runtime.stop();
   unwatchFile(path, refreshConfig);
   clearInterval(timer);
-  process.stdin.off("keypress", keypress);
+  terminalInput.off("keypress", keypress);
+  process.stdin.unpipe(terminalInput);
+  terminalInput.destroy();
   process.stdout.off("resize", resized);
   process.stdin.setRawMode(false);
   process.stdin.pause();
-  process.stdout.write("\x1b[?25h\x1b[?1049l");
+  process.stdout.write(disableMouse + "\x1b[?25h\x1b[?1049l");
 }
 // 处理字段输入、确认和取消，不在此阶段写入配置文件。
 function handleInput(character, key) {
@@ -461,11 +611,7 @@ async function keypress(character, key = {}) {
     else if (character?.toLowerCase() === "q")
       return await quit();
     else if (key.name === "tab" || key.name === "right" || key.name === "left") {
-      tab = (tab + (key.name === "left" || key.shift ? -1 : 1) + tabs.length) % tabs.length;
-      cursor = 0;
-      notice = "";
-      logDetail = null;
-      logOffset = 0;
+      switchTab((tab + (key.name === "left" || key.shift ? -1 : 1) + tabs.length) % tabs.length);
     } else if (tab === 0) {
       if (key.name === "up")
         cursor = Math.max(0, cursor - 1);
@@ -517,7 +663,8 @@ runtime.on("change", () => {
     notice = latest.message;
   dirty = true;
 });
-emitKeypressEvents(process.stdin);
+emitKeypressEvents(terminalInput);
+process.stdin.pipe(terminalInput);
 process.stdin.setRawMode(true);
 process.stdin.resume();
 // 同步外部配置变化到界面，读取失败时保留当前配置。
@@ -531,9 +678,9 @@ function refreshConfig() {
   dirty = true;
 }
 watchFile(path, { interval: 500, persistent: false }, refreshConfig);
-process.stdin.on("keypress", keypress);
+terminalInput.on("keypress", keypress);
 process.stdout.on("resize", resized);
-process.stdout.write("\x1b[?1049h\x1b[?25l\x1b[2J");
+process.stdout.write("\x1b[?1049h\x1b[?25l\x1b[2J" + enableMouse);
 const timer = setInterval(() => {
   if (runtime.active.size)
     dirty = true;

@@ -10,6 +10,7 @@ import { toOpenAI, fromOpenAI, toOllamaStream } from "./ollama.mjs";
 import { createLogger } from "./logger.mjs";
 import { validateModels } from "./config-store.mjs";
 import { watchModels } from "./model-store.mjs";
+import { finishResponse, relayOpenAI } from "./stream-response.mjs";
 
 const folder = dirname(fileURLToPath(import.meta.url));
 const configPath = resolve(process.argv[2] || resolve(folder, "../config/config.json"));
@@ -79,7 +80,7 @@ function ollamaModel(alias) {
     },
   };
 }
-// 限制请求体大小并解析 JSON，防止异常请求占用过多内存。
+// 解析 JSON
 async function readBody(req) {
   const chunks = [];
   let size = 0;
@@ -95,7 +96,7 @@ async function readBody(req) {
     throw fail("Invalid JSON request");
   }
 }
-// 按客户端接收速度写入响应，并处理等待期间的断连。
+// 写入响应并处理等待期间的断连
 async function write(res, data) {
   if (res.destroyed)
     throw new Error("Client disconnected");
@@ -170,15 +171,22 @@ async function forward(req, res, body, ollama, path, id) {
   });
   const started = Date.now();
   let response;
+  let outcome = "failed";
+  let cancelled = false;
+  let upstreamError;
+  let completion;
   const cancel = () => {
     if (!res.writableFinished) {
+      cancelled = true;
       response?.destroy();
       upstream.destroy(new Error("Client disconnected"));
     }
   };
   res.once("close", cancel);
-  // Keep an error listener installed throughout the request lifetime.
-  upstream.on("error", (error) => log(id, "upstream.error", { message: error.message }));
+  // 记录底层错误供最终结果使用，避免清理连接时再次覆盖已完成状态。
+  upstream.on("error", (error) => {
+    upstreamError = error;
+  });
   upstream.setTimeout(config.timeoutMs || 180000, () => upstream.destroy(new Error("Upstream idle timeout")));
   try {
     const ready = once(upstream, "response");
@@ -194,20 +202,27 @@ async function forward(req, res, body, ollama, path, id) {
         ...(response.headers["retry-after"] ? { "retry-after": response.headers["retry-after"] } : {}),
       });
       res.flushHeaders();
-      for await (const chunk of response) {
-        if (config.debug)
-          log(id, "upstream.chunk", { text: chunk.toString("utf8") });
-        await write(res, chunk);
-      }
+      completion = await relayOpenAI(response, res, {
+        stream: payload.stream && response.statusCode < 400,
+        responsesApi: path === "/v1/responses",
+        write,
+        onChunk: (chunk) => {
+          if (config.debug)
+            log(id, "upstream.chunk", { text: chunk.toString("utf8") });
+        },
+      });
     } else if (response.statusCode >= 400 || payload.stream === false) {
       let text = "";
       for await (const chunk of textChunks(response, id))
         text += chunk;
       if (response.statusCode >= 400) {
         json(res, response.statusCode, { error: text });
+        await finishResponse(res);
         return;
       }
       json(res, 200, fromOpenAI(JSON.parse(text), alias));
+      await finishResponse(res);
+      outcome = "success";
       return;
     } else {
       res.writeHead(200, { "content-type": "application/x-ndjson" });
@@ -218,17 +233,29 @@ async function forward(req, res, body, ollama, path, id) {
         await write(res, JSON.stringify(packet) + "\n");
       }
     }
-    res.end();
+    await finishResponse(res);
+    outcome = response.statusCode >= 400 ? "failed" : "success";
   } catch (error) {
-    if (ollama && res.headersSent && !res.destroyed)
-      res.end(JSON.stringify({ error: error.message }) + "\n");
-    else
-      throw error;
+    outcome = cancelled ? "cancelled" : "failed";
+    log(id, cancelled ? "request.cancelled" : "request.failed", {
+      message: error.message,
+      code: error.code || upstreamError?.code,
+      upstreamComplete: response?.complete,
+      downstreamFinished: res.writableFinished,
+    });
+    if (!res.destroyed) {
+      if (!res.headersSent)
+        json(res, 502, { error: { message: error.message, type: "proxy_error" } });
+      else if (ollama)
+        res.end(JSON.stringify({ error: error.message }) + "\n");
+      else
+        res.destroy();
+    }
   } finally {
     response?.destroy();
     upstream.destroy();
     res.removeListener("close", cancel);
-    log(id, "request.end", { elapsedMs: Date.now() - started });
+    log(id, "request.end", { outcome, ...completion, elapsedMs: Date.now() - started });
   }
 }
 

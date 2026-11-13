@@ -30,7 +30,7 @@ export class GatewayRuntime extends EventEmitter {
         this.requests.delete(this.requests.keys().next().value);
     }
     const r = this.requests.get(event.id);
-    if (r && (event.status >= 400 || /error|timeout/.test(event.event))) {
+    if (r && !r.outcome && (event.status >= 400 || /error|timeout/.test(event.event))) {
       if (!r.failed) {
         r.failed = true;
         this.failed++;
@@ -39,7 +39,12 @@ export class GatewayRuntime extends EventEmitter {
     }
     if (r && event.event === "request.end") {
       r.elapsedMs = event.elapsedMs;
-      r.status = r.failed ? "失败" : "完成";
+      r.outcome = event.outcome || (r.failed ? "failed" : "success");
+      if (r.outcome === "failed" && !r.failed) {
+        r.failed = true;
+        this.failed++;
+      }
+      r.status = r.outcome === "cancelled" ? "已取消" : r.outcome === "success" ? "完成" : "失败";
       this.active.delete(event.id);
     }
     this.emit("change");
