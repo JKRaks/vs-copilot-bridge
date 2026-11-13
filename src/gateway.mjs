@@ -11,6 +11,7 @@ import { createLogger } from "./logger.mjs";
 import { validateModels } from "./config-store.mjs";
 import { watchModels } from "./model-store.mjs";
 import { finishResponse, relayOpenAI } from "./stream-response.mjs";
+import { finishResponse, relayOpenAI } from "./stream-response.mjs";
 
 const folder = dirname(fileURLToPath(import.meta.url));
 const configPath = resolve(process.argv[2] || resolve(folder, "../config/config.json"));
@@ -124,7 +125,7 @@ async function write(res, data) {
       res.once("error", failed);
     });
 }
-// 跨网络分块解码 UTF-8，避免中文被拆开时出现乱码。
+// 跨网络分块解码 UTF-8
 async function* textChunks(response, id) {
   const decoder = new StringDecoder("utf8");
   for await (const chunk of response) {
@@ -138,7 +139,7 @@ async function* textChunks(response, id) {
     yield tail;
 }
 
-// 按模型选择上游并转发响应；Ollama 请求在此适配，结束时释放连接。
+// 按模型选择上游并转发响应；适配Ollama
 async function forward(req, res, body, ollama, path, id) {
   const alias = body.model;
   const route = getModel(alias);
@@ -259,7 +260,7 @@ async function forward(req, res, body, ollama, path, id) {
   }
 }
 
-// 检查入口和鉴权，处理模型查询，再将推理请求交给转发流程。
+// 鉴权处理模型查询并转发推理请求
 async function handle(req, res, id) {
   const path = new URL(req.url, "http://localhost").pathname;
   log(id, "request", { method: req.method, path });

@@ -1,5 +1,4 @@
 import { readFileSync, writeFileSync, renameSync } from "node:fs";
-// 校验模型路由和可选能力字段，避免无效映射进入运行配置。
 export function validateModels(models, providers) {
   if (!models || typeof models !== "object" || Array.isArray(models))
     throw new Error("模型映射必须为对象");
@@ -19,7 +18,7 @@ export function validateModels(models, providers) {
       throw new Error(`${id}: 描述必须为文本`);
   }
 }
-// 检查服务参数、提供商和模型引用，保存或加载前统一验证。
+// 参数检查
 export function validateConfig(c) {
   if (!Number.isInteger(c.port) || c.port < 1 || c.port > 65535)
     throw new Error("端口必须为 1–65535 的整数");
@@ -38,19 +37,19 @@ export function validateConfig(c) {
   }
   validateModels(c.models || {}, c.providers);
 }
-// 读取并验证配置，兼容带 BOM 的 Windows 文本文件。
+// 读取并验证配置
 export function loadConfig(path) {
   const c = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, ""));
   validateConfig(c);
   return c;
 }
-// 验证后先写临时文件再替换，避免直接覆盖时留下半份配置。
+// 临时文件写入
 export function saveConfig(path, c) {
   validateConfig(c);
   writeFileSync(path + ".tmp", JSON.stringify(c, null, 2) + "\n", { mode: 0o600 });
   renameSync(path + ".tmp", path);
 }
-// 在配置副本中更新条目；提供商改名时同步修改模型引用。
+// 更新
 export function updateEntry(c, section, original, id, value) {
   const next = structuredClone(c);
   if (id !== original && Object.hasOwn(next[section], id))
@@ -65,7 +64,7 @@ export function updateEntry(c, section, original, id, value) {
   validateConfig(next);
   return next;
 }
-// 删除配置条目，阻止移除仍被模型引用的提供商。
+// 删除
 export function deleteEntry(c, section, id) {
   if (section === "providers" && Object.values(c.models).some((m) => m.provider === id))
     throw new Error("该提供商仍被模型引用");

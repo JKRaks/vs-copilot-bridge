@@ -1,5 +1,4 @@
-// Translate only the Ollama chat surface; upstreams remain OpenAI compatible.
-// 识别图片类型并生成 data URL，避免将所有图片误标为 PNG。
+// 识别图片类型并生成 data URL
 function imageUrl(image) {
   if (image.startsWith("data:"))
     return image;
@@ -21,7 +20,7 @@ function imageUrl(image) {
   return `data:${mime};base64,${image}`;
 }
 
-// 把 Ollama 聊天转换为 OpenAI 请求，并匹配工具调用与工具结果。
+// 转换 Ollama 响应并匹配工具调用与结果
 export function toOpenAI(body, model) {
   const pending = [];
   let callIndex = 0;
@@ -109,7 +108,7 @@ function envelope(model, message, done, reason, usage) {
       : {}),
   };
 }
-// 把完整的 OpenAI 聊天响应转换为 Ollama 消息和用量信息。
+// 转换 OpenAI 聊天响应为 Ollama 消息和用量信息
 export function fromOpenAI(body, model) {
   if (body.error)
     throw new Error(JSON.stringify(body.error));
@@ -124,8 +123,7 @@ export function fromOpenAI(body, model) {
   return envelope(model, message, true, choice.finish_reason, body.usage);
 }
 
-// UTF-8 decoding is supplied by the caller. SSE boundaries may span TCP chunks.
-// 按 SSE 事件边界组装数据，允许一个事件跨越多个网络分块。
+// SSE 组装数据
 export async function* sseEvents(chunks) {
   let pending = "";
   function parse(frame) {
@@ -149,7 +147,7 @@ export async function* sseEvents(chunks) {
   }
 }
 
-// 转换流式文本和思考内容；工具参数收齐后再输出，避免半截 JSON。
+// 转换流式文本和思考内容
 export async function* toOllamaStream(chunks, model) {
   const calls = new Map();
   let reason,

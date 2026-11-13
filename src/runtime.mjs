@@ -14,7 +14,7 @@ export class GatewayRuntime extends EventEmitter {
       failed: 0,
     });
   }
-  // 汇总子进程日志和请求状态，通知界面刷新，并限制历史记录数量。
+  // 汇总子进程日志和请求状态
   record(event) {
     this.recent.push(event);
     if (this.recent.length > 150)
@@ -49,7 +49,7 @@ export class GatewayRuntime extends EventEmitter {
     }
     this.emit("change");
   }
-  // 按选定入口启动代理子进程，接收日志并跟踪进程退出。
+  // 按选定入口启动代理子进程，接收日志并跟踪进程退出
   start(modes) {
     if (this.child || !modes.length)
       throw new Error("请选择至少一种入口，并先停止已运行的代理");
@@ -94,7 +94,7 @@ export class GatewayRuntime extends EventEmitter {
     );
     this.emit("change");
   }
-  // 停止本界面启动的代理，并等待退出后再完成清理。
+  // 停止代理并清理
   async stop() {
     if (!this.child)
       return;
